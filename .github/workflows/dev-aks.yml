@@ -51,8 +51,8 @@ jobs:
             --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Determine image tag
-          run:
-            echo "IMAGE_TAG=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_ENV
+        run: 
+          echo "IMAGE_TAG=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_ENV
 
       - name: Verify manifests present
         run: |
