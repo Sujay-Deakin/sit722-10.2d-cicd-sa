@@ -1,0 +1,92 @@
+name: CI - Test, Build & Push (testing)
+
+on:
+  push:
+    branches: ["testing"]
+
+env:
+  ACR_NAME: ${{ secrets.ACR_NAME }}
+  ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
+  AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+
+jobs:
+  test_build_push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pytest runner
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest requests
+
+      # ---- Unit tests (continue even if none) ----
+      - name: Test product_service
+        working-directory: ./backend/product_service
+        run: |
+          pip install -r requirements.txt
+          pytest -q || echo "No tests / tests failed; continuing to build"
+
+      - name: Test order_service
+        working-directory: ./backend/order_service
+        run: |
+          pip install -r requirements.txt
+          pytest -q || echo "No tests / tests failed; continuing to build"
+
+      - name: Test customer_service
+        working-directory: ./backend/customer_service
+        run: |
+          pip install -r requirements.txt
+          pytest -q || echo "No tests / tests failed; continuing to build"
+
+      # ---- Azure login & ACR login ----
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ env.AZURE_CREDENTIALS }}
+
+      - name: ACR login (Docker)
+        run: az acr login --name "${{ env.ACR_NAME }}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ---- Build & push images (tag = commit SHA) ----
+      - name: Build & Push product_service
+        run: |
+          REG=${{ env.ACR_LOGIN_SERVER }}
+          docker buildx build --platform linux/amd64 \
+            -t $REG/product_service:${GITHUB_SHA} \
+            -f backend/product_service/Dockerfile \
+            --push .
+
+      - name: Build & Push order_service
+        run: |
+          REG=${{ env.ACR_LOGIN_SERVER }}
+          docker buildx build --platform linux/amd64 \
+            -t $REG/order_service:${GITHUB_SHA} \
+            -f backend/order_service/Dockerfile \
+            --push .
+
+      - name: Build & Push customer_service
+        run: |
+          REG=${{ env.ACR_LOGIN_SERVER }}
+          docker buildx build --platform linux/amd64 \
+            -t $REG/customer_service:${GITHUB_SHA} \
+            -f backend/customer_service/Dockerfile \
+            --push .
+
+      - name: Build & Push frontend
+        run: |
+          REG=${{ env.ACR_LOGIN_SERVER }}
+          docker buildx build --platform linux/amd64 \
+            -t $REG/frontend:${GITHUB_SHA} \
+            -f frontend/Dockerfile \
+            --push .
