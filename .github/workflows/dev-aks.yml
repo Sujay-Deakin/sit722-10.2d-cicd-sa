@@ -56,7 +56,6 @@ jobs:
             --docker-password="${SP_CLIENT_SECRET}" \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      # If your Deployments DON'T have imagePullSecrets, link it at namespace level
       - name: Link imagePullSecret to default SA (dev)
         run: |
           kubectl patch serviceaccount default -n "${{ env.DEV_NAMESPACE }}" \
@@ -85,8 +84,7 @@ jobs:
             envsubst < "$f" | kubectl apply -n "${{ env.DEV_NAMESPACE }}" -f -
           done
 
-
-      - name: Debug- show what got deployed
+      - name: Debug - show what got deployed
         run: kubectl get deploy,po,svc -n "${{ env.DEV_NAMESPACE }}" -o wide
 
       - name: Wait for rollouts (dev)
