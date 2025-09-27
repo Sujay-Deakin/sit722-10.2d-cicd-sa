@@ -2,7 +2,7 @@ name: CI - Test, Build & Push (testing)
 
 on:
   push:
-    branches: ["testing"]
+    branches: ["testing", "main"]
 
 env:
   ACR_NAME: ${{ secrets.ACR_NAME }}
@@ -13,7 +13,7 @@ jobs:
   test_build_push:
     runs-on: ubuntu-latest
 
-    # Start Postgres for tests
+    # Start Postgres for tests (works on testing and main)
     services:
       postgres:
         image: postgres:15
@@ -97,7 +97,7 @@ jobs:
           pip install --no-cache-dir -r requirements.txt
           pytest -vv -ra || echo "no tests found for customer_service"
 
-      # ---------- Build & push (only runs if product_service tests passed) ----------
+      # ---------- Build & push (runs after tests) ----------
       - name: Azure login
         uses: azure/login@v2
         with:

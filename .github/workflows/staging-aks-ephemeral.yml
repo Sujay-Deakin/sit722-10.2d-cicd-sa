@@ -1,0 +1,125 @@
+name: Staging - Ephemeral AKS namespace (after CI)
+
+on:
+  workflow_run:
+    workflows: ["CI - Test, Build & Push (testing)"] 
+    types: [completed]
+  workflow_dispatch: {}
+
+env:
+  ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
+  ACR_NAME:         ${{ secrets.ACR_NAME }}
+  AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+
+jobs:
+  staging_ephemeral:
+    if: ${{ github.event_name == 'workflow_dispatch' ||
+            (github.event_name == 'workflow_run' &&
+             github.event.workflow_run.conclusion == 'success' &&
+             github.event.workflow_run.head_branch == 'testing') }}
+    runs-on: ubuntu-latest
+    steps:
+      
+      - name: Determine ref & image tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "REF=main" >> $GITHUB_ENV
+            echo "IMAGE_TAG=${GITHUB_SHA}" >> $GITHUB_ENV
+          else
+            echo "REF=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_ENV
+            echo "IMAGE_TAG=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_ENV
+          fi
+          echo "STG_NS=stg-${{ github.run_id }}" >> $GITHUB_ENV
+          echo "Using namespace: ${STG_NS} (ref=${REF}, tag=${IMAGE_TAG})"
+
+      - name: Checkout (matching CI commit or main for manual)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REF }}
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ secrets.AKS_RG }}
+          cluster-name:   ${{ secrets.AKS_CLUSTER_NAME }}
+          subscription:   ${{ secrets.AZ_SUBSCRIPTION_ID }}
+
+      - name: Create ephemeral namespace
+        run: kubectl create namespace "${STG_NS}"
+
+      - name: Create ACR pull secret in staging (SP creds)
+        env:
+          SP_CLIENT_ID:     ${{ fromJSON(secrets.AZURE_CREDENTIALS).clientId }}
+          SP_CLIENT_SECRET: ${{ fromJSON(secrets.AZURE_CREDENTIALS).clientSecret }}
+        run: |
+          kubectl create secret docker-registry acr-pull \
+            -n "${STG_NS}" \
+            --docker-server="${{ env.ACR_LOGIN_SERVER }}" \
+            --docker-username="${SP_CLIENT_ID}" \
+            --docker-password="${SP_CLIENT_SECRET}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl patch serviceaccount default -n "${STG_NS}" \
+            -p '{"imagePullSecrets":[{"name":"acr-pull"}]}'
+
+      - name: Apply manifests (frontend as ClusterIP)
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y gettext-base
+          shopt -s nullglob
+          for f in k8s/prod/*.y*ml; do
+            echo "Applying $f ..."
+            rendered=$(ACR_LOGIN_SERVER="${{ env.ACR_LOGIN_SERVER }}" GITHUB_SHA="${IMAGE_TAG}" envsubst < "$f")
+            if echo "$f" | grep -q "frontend"; then
+              echo "$rendered" | sed 's/type: LoadBalancer/type: ClusterIP/' | kubectl apply -n "${STG_NS}" -f -
+            else
+              echo "$rendered" | kubectl apply -n "${STG_NS}" -f -
+            fi
+          done
+          kubectl get deploy,svc -n "${STG_NS}"
+
+      - name: Wait for rollouts
+        run: |
+          set -e
+          for d in product-service order-service customer-service frontend; do
+            kubectl rollout status -n "${STG_NS}" deployment/$d --timeout=240s
+          done
+
+      - name: Debug services and endpoints
+        run: |
+          echo "Namespace: ${STG_NS}"
+          kubectl get deploy,svc,ep,pods -n "${STG_NS}" -o wide
+          for s in product-service order-service customer-service; do
+            echo "---- describe svc $s ----"
+            kubectl describe svc $s -n "${STG_NS}" || true
+            echo "---- endpoints $s ----"
+            kubectl get ep $s -n "${STG_NS}" -o yaml || true
+          done
+          echo "---- recent app logs ----"
+          for d in product-service order-service customer-service; do
+            echo "---- $d ----"
+            kubectl logs -n "${STG_NS}" deploy/$d --tail=200 || true
+          done
+
+
+      - name: In-cluster smoke (endpoints exist)
+        run: |
+          set -e
+          for s in product-service order-service customer-service; do
+            echo "Checking endpoints for $s ..."
+            EP=$(kubectl get ep -n "${STG_NS}" $s -o jsonpath='{.subsets[*].addresses[*].ip}')
+            if [ -z "$EP" ]; then
+              echo "No endpoints for $s"
+              exit 1
+            fi
+            echo "$s endpoints -> $EP"
+          done
+
+
+      - name: Destroy ephemeral namespace
+        if: always()
+        run: kubectl delete namespace "${STG_NS}" --wait=true
