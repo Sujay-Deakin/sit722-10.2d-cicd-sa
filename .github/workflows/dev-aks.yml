@@ -74,11 +74,14 @@ jobs:
 
       - name: Apply manifests to dev (with image vars)
         run: |
+          set -euo pipefail
           sudo apt-get update && sudo apt-get install -y gettext-base
           for f in k8s/prod/*.yaml; do
+            echo "Applying $f ..."
             ACR_LOGIN_SERVER="${{ env.ACR_LOGIN_SERVER }}" GITHUB_SHA="${IMAGE_TAG}" \
             envsubst < "$f" | kubectl apply -n "${{ env.DEV_NAMESPACE }}" -f -
           done
+
 
       - name: Debug- show what got deployed
         run: kubectl get deploy,po,svc -n "${{ env.DEV_NAMESPACE }}" -o wide
