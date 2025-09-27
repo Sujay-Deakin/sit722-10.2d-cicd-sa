@@ -2,7 +2,7 @@ name: Staging - Ephemeral AKS namespace (after CI)
 
 on:
   workflow_run:
-    workflows: ["CI - Test, Build & Push (testing)"]  # must match your CI name exactly
+    workflows: ["CI - Test, Build & Push (testing)"]  # must match your CI workflow name
     types: [completed]
   workflow_dispatch: {}
 
@@ -16,10 +16,23 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (same commit as CI)
+      # Choose the correct ref: the CI commit when auto-run, or main when manual
+      - name: Determine ref & image tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "REF=main" >> $GITHUB_ENV
+            echo "IMAGE_TAG=${GITHUB_SHA}" >> $GITHUB_ENV
+          else
+            echo "REF=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_ENV
+            echo "IMAGE_TAG=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_ENV
+          fi
+          echo "STG_NS=stg-${{ github.run_id }}" >> $GITHUB_ENV
+          echo "Using namespace: ${STG_NS} (ref=${REF}, tag=${IMAGE_TAG})"
+
+      - name: Checkout (matching CI commit or main for manual)
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ env.REF }}
 
       - name: Azure login
         uses: azure/login@v2
@@ -33,17 +46,10 @@ jobs:
           cluster-name:   ${{ secrets.AKS_CLUSTER_NAME }}
           subscription:   ${{ secrets.AZ_SUBSCRIPTION_ID }}
 
-      - name: Derive vars (namespace + image tag)
-        run: |
-          echo "STG_NS=stg-${{ github.run_id }}" >> $GITHUB_ENV
-          echo "IMAGE_TAG=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_ENV
-          echo "Using namespace: stg-${{ github.run_id }}"
-
       - name: Create ephemeral namespace
         run: kubectl create namespace "${STG_NS}"
 
-      # Pull secret via Service Principal (you already granted AcrPull)
-      - name: Create ACR pull secret in staging
+      - name: Create ACR pull secret in staging (SP creds)
         env:
           SP_CLIENT_ID:     ${{ fromJSON(secrets.AZURE_CREDENTIALS).clientId }}
           SP_CLIENT_SECRET: ${{ fromJSON(secrets.AZURE_CREDENTIALS).clientSecret }}
@@ -57,7 +63,7 @@ jobs:
           kubectl patch serviceaccount default -n "${STG_NS}" \
             -p '{"imagePullSecrets":[{"name":"acr-pull"}]}'
 
-      - name: Apply manifests (override frontend to ClusterIP)
+      - name: Apply manifests (frontend as ClusterIP)
         run: |
           set -euo pipefail
           sudo apt-get update && sudo apt-get install -y gettext-base
@@ -65,7 +71,6 @@ jobs:
           for f in k8s/prod/*.y*ml; do
             echo "Applying $f ..."
             rendered=$(ACR_LOGIN_SERVER="${{ env.ACR_LOGIN_SERVER }}" GITHUB_SHA="${IMAGE_TAG}" envsubst < "$f")
-            # keep LBs out of staging
             if echo "$f" | grep -q "frontend"; then
               echo "$rendered" | sed 's/type: LoadBalancer/type: ClusterIP/' | kubectl apply -n "${STG_NS}" -f -
             else
