@@ -1,10 +1,8 @@
-name: Prod - Deploy to AKS (after CI on main)
+name: Prod - Deploy to AKS (on main)
 
 on:
-  workflow_run:
-    workflows: ["CI - Test, Build & Push (testing)"]  # must match CI name
-    types: [completed]
-    branches: [main]                                  # only when CI runs on main
+  push:
+    branches: ["main"]
   workflow_dispatch: {}
 
 env:
@@ -19,13 +17,10 @@ concurrency:
 
 jobs:
   deploy_prod:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (CI commit for workflow_run, or main for manual)
+      - name: Checkout (this main commit)
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.event.workflow_run.head_sha }}
 
       - name: Azure login
         uses: azure/login@v2
@@ -42,7 +37,7 @@ jobs:
       - name: Ensure prod namespace
         run: kubectl create namespace "${{ env.PROD_NAMESPACE }}" --dry-run=client -o yaml | kubectl apply -f -
 
-      # Use SP creds + AcrPull role (no ACR admin)
+      # Use SP creds (AcrPull on ACR) for the pull secret
       - name: Create/Update ACR pull secret (prod)
         env:
           SP_CLIENT_ID:     ${{ fromJSON(secrets.AZURE_CREDENTIALS).clientId }}
@@ -57,19 +52,28 @@ jobs:
           kubectl patch serviceaccount default -n "${{ env.PROD_NAMESPACE }}" \
             -p '{"imagePullSecrets":[{"name":"acr-pull"}]}'
 
-      - name: Set image tag (deploy this CI commit)
+      # --- Wait for CI images to exist in ACR for this commit SHA ---
+      - name: Wait for images in ACR (this commit SHA)
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "IMAGE_TAG=${GITHUB_SHA}" >> $GITHUB_ENV
-          else
-            echo "IMAGE_TAG=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_ENV
-          fi
+          set -e
+          TAG="${GITHUB_SHA}"
+          echo "Waiting for images with tag ${TAG} in ACR '${{ env.ACR_NAME }}'..."
+          for repo in product_service order_service customer_service frontend; do
+            echo "Checking $repo:${TAG}"
+            for i in $(seq 1 60); do
+              if az acr repository show -n "${{ env.ACR_NAME }}" --image "$repo:${TAG}" >/dev/null 2>&1; then
+                echo "Found $repo:${TAG}"; break
+              fi
+              sleep 10
+              if [ $i -eq 60 ]; then echo "Image $repo:${TAG} not found in time"; exit 1; fi
+            done
+          done
 
       - name: Apply manifests to prod
         run: |
           sudo apt-get update && sudo apt-get install -y gettext-base
           for f in k8s/prod/*.y*ml; do
-            ACR_LOGIN_SERVER="${{ env.ACR_LOGIN_SERVER }}" GITHUB_SHA="${IMAGE_TAG}" \
+            ACR_LOGIN_SERVER="${{ env.ACR_LOGIN_SERVER }}" GITHUB_SHA="${GITHUB_SHA}" \
             envsubst < "$f" | kubectl apply -n "${{ env.PROD_NAMESPACE }}" -f -
           done
           kubectl get deploy,svc -n "${{ env.PROD_NAMESPACE }}"
