@@ -2,7 +2,7 @@ name: Staging - Ephemeral AKS namespace (after CI)
 
 on:
   workflow_run:
-    workflows: ["CI - Test, Build & Push (testing)"]  # must match your CI workflow name
+    workflows: ["CI - Test, Build & Push (testing)"] 
     types: [completed]
   workflow_dispatch: {}
 
@@ -13,10 +13,13 @@ env:
 
 jobs:
   staging_ephemeral:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name == 'workflow_dispatch' ||
+            (github.event_name == 'workflow_run' &&
+             github.event.workflow_run.conclusion == 'success' &&
+             github.event.workflow_run.head_branch == 'testing') }}
     runs-on: ubuntu-latest
     steps:
-      # Choose the correct ref: the CI commit when auto-run, or main when manual
+      
       - name: Determine ref & image tag
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
