@@ -5,15 +5,13 @@ on:
   workflow_run:
     workflows: ["CI - Test, Build & Push (testing)"]
     types: [completed]
-  # Also allow a manual Run button
+  # Manual Run button
   workflow_dispatch: {}
 
 env:
   ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
   ACR_NAME: ${{ secrets.ACR_NAME }}
   AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
-  AKS_RG: ${{ secrets.AKS_RG }}
-  AKS_CLUSTER_NAME: ${{ secrets.AKS_CLUSTER_NAME }}
   DEV_NAMESPACE: dev
 
 jobs:
@@ -22,7 +20,7 @@ jobs:
     if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout (same commit as CI run)
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
@@ -35,28 +33,43 @@ jobs:
       - name: Set AKS context
         uses: azure/aks-set-context@v4
         with:
-          resource-group: ${{ env.AKS_RG }}
-          cluster-name: ${{ env.AKS_CLUSTER_NAME }}
+          resource-group: ${{ secrets.AKS_RG }}
+          cluster-name:   ${{ secrets.AKS_CLUSTER_NAME }}
+          subscription:   ${{ secrets.AZ_SUBSCRIPTION_ID }}
 
       - name: Ensure dev namespace
         run: kubectl create namespace "${{ env.DEV_NAMESPACE }}" --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Create/Update ACR pull secret (dev)
+      # Use the Service Principal (AcrPull on ACR) to create pull secret
+      - name: Create/Update ACR pull secret (dev via SP)
+        env:
+          SP_CLIENT_ID:     ${{ fromJSON(secrets.AZURE_CREDENTIALS).clientId }}
+          SP_CLIENT_SECRET: ${{ fromJSON(secrets.AZURE_CREDENTIALS).clientSecret }}
         run: |
           kubectl create secret docker-registry acr-pull \
             --namespace "${{ env.DEV_NAMESPACE }}" \
             --docker-server="${{ env.ACR_LOGIN_SERVER }}" \
-            --docker-username="$(az acr credential show -n ${{ env.ACR_NAME }} --query username -o tsv)" \
-            --docker-password="$(az acr credential show -n ${{ env.ACR_NAME }} --query passwords[0].value -o tsv)" \
+            --docker-username="${SP_CLIENT_ID}" \
+            --docker-password="${SP_CLIENT_SECRET}" \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Determine image tag
-        run: 
-          echo "IMAGE_TAG=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_ENV
+      # If your Deployments DON'T have imagePullSecrets, link it at namespace level
+      - name: Link imagePullSecret to default SA (dev)
+        run: |
+          kubectl patch serviceaccount default -n "${{ env.DEV_NAMESPACE }}" \
+            -p '{"imagePullSecrets":[{"name":"acr-pull"}]}'
+
+      - name: Determine image tag (from CI commit)
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "IMAGE_TAG=${GITHUB_SHA}" >> $GITHUB_ENV
+          else
+            echo "IMAGE_TAG=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_ENV
+          fi
 
       - name: Verify manifests present
         run: |
-          test -d k8s/prod || { echo "k8s/prod not found in this ref. Ensure manifests are committed on the CI branch."; exit 1; }
+          test -d k8s/prod || { echo "k8s/prod not found in this ref."; exit 1; }
           ls -la k8s/prod
 
       - name: Apply manifests to dev (with image vars)
@@ -67,13 +80,15 @@ jobs:
             envsubst < "$f" | kubectl apply -n "${{ env.DEV_NAMESPACE }}" -f -
           done
 
+      - name: Debug: show what got deployed
+        run: kubectl get deploy,po,svc -n "${{ env.DEV_NAMESPACE }}" -o wide
+
       - name: Wait for rollouts (dev)
         run: |
           set -e
-          kubectl rollout status -n "${{ env.DEV_NAMESPACE }}" deployment/product_service --timeout=180s
-          kubectl rollout status -n "${{ env.DEV_NAMESPACE }}" deployment/order_service --timeout=180s
-          kubectl rollout status -n "${{ env.DEV_NAMESPACE }}" deployment/customer_service --timeout=180s
-          kubectl rollout status -n "${{ env.DEV_NAMESPACE }}" deployment/frontend --timeout=240s
+          for d in product-service order-service customer-service frontend; do
+            kubectl rollout status -n "${{ env.DEV_NAMESPACE }}" deployment/$d --timeout=240s
+          done
 
       - name: Show services (dev)
         run: kubectl get svc -n "${{ env.DEV_NAMESPACE }}"
