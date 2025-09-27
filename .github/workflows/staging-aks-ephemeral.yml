@@ -1,0 +1,93 @@
+name: Staging - Ephemeral AKS namespace (after CI)
+
+on:
+  workflow_run:
+    workflows: ["CI - Test, Build & Push (testing)"]  # must match your CI name exactly
+    types: [completed]
+  workflow_dispatch: {}
+
+env:
+  ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
+  ACR_NAME:         ${{ secrets.ACR_NAME }}
+  AZURE_CREDENTIALS:${{ secrets.AZURE_CREDENTIALS }}
+
+jobs:
+  staging_ephemeral:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (same commit as CI)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ secrets.AKS_RG }}
+          cluster-name:   ${{ secrets.AKS_CLUSTER_NAME }}
+          subscription:   ${{ secrets.AZ_SUBSCRIPTION_ID }}
+
+      - name: Derive vars (namespace + image tag)
+        run: |
+          echo "STG_NS=stg-${{ github.run_id }}" >> $GITHUB_ENV
+          echo "IMAGE_TAG=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_ENV
+          echo "Using namespace: stg-${{ github.run_id }}"
+
+      - name: Create ephemeral namespace
+        run: kubectl create namespace "${STG_NS}"
+
+      # Pull secret via Service Principal (you already granted AcrPull)
+      - name: Create ACR pull secret in staging
+        env:
+          SP_CLIENT_ID:     ${{ fromJSON(secrets.AZURE_CREDENTIALS).clientId }}
+          SP_CLIENT_SECRET: ${{ fromJSON(secrets.AZURE_CREDENTIALS).clientSecret }}
+        run: |
+          kubectl create secret docker-registry acr-pull \
+            -n "${STG_NS}" \
+            --docker-server="${{ env.ACR_LOGIN_SERVER }}" \
+            --docker-username="${SP_CLIENT_ID}" \
+            --docker-password="${SP_CLIENT_SECRET}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl patch serviceaccount default -n "${STG_NS}" \
+            -p '{"imagePullSecrets":[{"name":"acr-pull"}]}'
+
+      - name: Apply manifests (override frontend to ClusterIP)
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y gettext-base
+          shopt -s nullglob
+          for f in k8s/prod/*.y*ml; do
+            echo "Applying $f ..."
+            rendered=$(ACR_LOGIN_SERVER="${{ env.ACR_LOGIN_SERVER }}" GITHUB_SHA="${IMAGE_TAG}" envsubst < "$f")
+            # keep LBs out of staging
+            if echo "$f" | grep -q "frontend"; then
+              echo "$rendered" | sed 's/type: LoadBalancer/type: ClusterIP/' | kubectl apply -n "${STG_NS}" -f -
+            else
+              echo "$rendered" | kubectl apply -n "${STG_NS}" -f -
+            fi
+          done
+          kubectl get deploy,svc -n "${STG_NS}"
+
+      - name: Wait for rollouts
+        run: |
+          set -e
+          for d in product-service order-service customer-service frontend; do
+            kubectl rollout status -n "${STG_NS}" deployment/$d --timeout=240s
+          done
+
+      - name: In-cluster smoke (/health)
+        run: |
+          kubectl run smoke --rm -i -n "${STG_NS}" --image=curlimages/curl:8.10.1 --restart=Never -- \
+            sh -lc 'set -e; for s in product-service order-service customer-service; do
+                      code=$(curl -s -o /dev/null -w "%{http_code}" http://$s:8000/health);
+                      echo "$s -> $code"; [ "$code" = "200" ] || exit 1; done'
+
+      - name: Destroy ephemeral namespace
+        if: always()
+        run: kubectl delete namespace "${STG_NS}" --wait=true
