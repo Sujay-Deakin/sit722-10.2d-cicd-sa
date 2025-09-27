@@ -80,7 +80,7 @@ jobs:
             envsubst < "$f" | kubectl apply -n "${{ env.DEV_NAMESPACE }}" -f -
           done
 
-      - name: Debug: show what got deployed
+      - name: Debug- show what got deployed
         run: kubectl get deploy,po,svc -n "${{ env.DEV_NAMESPACE }}" -o wide
 
       - name: Wait for rollouts (dev)
