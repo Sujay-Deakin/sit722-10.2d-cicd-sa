@@ -86,6 +86,23 @@ jobs:
             kubectl rollout status -n "${STG_NS}" deployment/$d --timeout=240s
           done
 
+      - name: Debug services and endpoints
+        run: |
+          echo "Namespace: ${STG_NS}"
+          kubectl get deploy,svc,ep,pods -n "${STG_NS}" -o wide
+          for s in product-service order-service customer-service; do
+            echo "---- describe svc $s ----"
+            kubectl describe svc $s -n "${STG_NS}" || true
+            echo "---- endpoints $s ----"
+            kubectl get ep $s -n "${STG_NS}" -o yaml || true
+          done
+          echo "---- recent app logs ----"
+          for d in product-service order-service customer-service; do
+            echo "---- $d ----"
+            kubectl logs -n "${STG_NS}" deploy/$d --tail=200 || true
+          done
+
+
       - name: In-cluster smoke (/health)
         run: |
           kubectl run smoke --rm -i -n "${STG_NS}" --image=curlimages/curl:8.10.1 --restart=Never -- \
