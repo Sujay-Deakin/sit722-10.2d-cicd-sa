@@ -2,7 +2,7 @@ name: CI - Test, Build & Push (testing)
 
 on:
   push:
-    branches: ["testing"]
+    branches: ["testing", "main"]
 
 env:
   ACR_NAME: ${{ secrets.ACR_NAME }}
