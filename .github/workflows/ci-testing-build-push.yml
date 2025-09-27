@@ -22,31 +22,44 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install pytest runner
+      - name: Upgrade pip & base test deps
         run: |
+          python -V
           python -m pip install --upgrade pip
-          pip install pytest requests
+          pip install pytest httpx pytest-cov
 
-      # ---- Unit tests (continue even if none) ----
+      # ---------- Tests (fail fast, full output) ----------
       - name: Test product_service
         working-directory: ./backend/product_service
+        env:
+          PYTHONPATH: ${{ github.workspace }}/backend/product_service
         run: |
-          pip install -r requirements.txt
-          pytest -q
+          pip install --no-cache-dir -r requirements.txt
+          echo "== product_service tests =="
+          find . -maxdepth 2 -type f \( -name "test*.py" -o -name "*_test.py" \) -print
+          pytest -vv -ra
 
       - name: Test order_service
         working-directory: ./backend/order_service
+        env:
+          PYTHONPATH: ${{ github.workspace }}/backend/order_service
         run: |
-          pip install -r requirements.txt
-          pytest -q
+          pip install --no-cache-dir -r requirements.txt
+          echo "== order_service tests =="
+          find . -maxdepth 2 -type f \( -name "test*.py" -o -name "*_test.py" \) -print
+          pytest -vv -ra
 
       - name: Test customer_service
         working-directory: ./backend/customer_service
+        env:
+          PYTHONPATH: ${{ github.workspace }}/backend/customer_service
         run: |
-          pip install -r requirements.txt
-          pytest -q
+          pip install --no-cache-dir -r requirements.txt
+          echo "== customer_service tests =="
+          find . -maxdepth 2 -type f \( -name "test*.py" -o -name "*_test.py" \) -print
+          pytest -vv -ra
 
-      # ---- Azure login & ACR login ----
+      # ---------- Build & push (only runs if all tests passed) ----------
       - name: Azure login
         uses: azure/login@v2
         with:
@@ -58,7 +71,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # ---- Build & push images (tag = commit SHA) ----
       - name: Build & Push product_service
         run: |
           REG=${{ env.ACR_LOGIN_SERVER }}
