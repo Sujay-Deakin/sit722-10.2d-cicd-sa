@@ -32,19 +32,19 @@ jobs:
         working-directory: ./backend/product_service
         run: |
           pip install -r requirements.txt
-          pytest -q || echo "No tests / tests failed; continuing to build"
+          pytest -q
 
       - name: Test order_service
         working-directory: ./backend/order_service
         run: |
           pip install -r requirements.txt
-          pytest -q || echo "No tests / tests failed; continuing to build"
+          pytest -q
 
       - name: Test customer_service
         working-directory: ./backend/customer_service
         run: |
           pip install -r requirements.txt
-          pytest -q || echo "No tests / tests failed; continuing to build"
+          pytest -q
 
       # ---- Azure login & ACR login ----
       - name: Azure login
