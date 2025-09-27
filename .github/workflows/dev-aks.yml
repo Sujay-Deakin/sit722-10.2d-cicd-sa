@@ -16,8 +16,13 @@ env:
 
 jobs:
   deploy_dev:
-    # Run after a successful CI or when manually dispatched
-    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+
+    # only when CI succeeded on the 'testing' branch, or manual run
+    if: ${{ github.event_name == 'workflow_dispatch' ||
+            (github.event_name == 'workflow_run' &&
+             github.event.workflow_run.conclusion == 'success' &&
+             github.event.workflow_run.head_branch == 'testing') }}
+
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (same commit as CI run)

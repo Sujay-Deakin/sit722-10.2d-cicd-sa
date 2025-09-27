@@ -206,8 +206,8 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+.DS_Store
 azure-credentials.json
 .DS_Store
+azure-credentials.json
 
-azure-credentials.json
-.DS_Store

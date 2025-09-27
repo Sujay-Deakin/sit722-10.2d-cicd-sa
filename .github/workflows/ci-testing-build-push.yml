@@ -13,7 +13,7 @@ jobs:
   test_build_push:
     runs-on: ubuntu-latest
 
-    # Start Postgres for tests
+    # PostgreSQL for product_service tests
     services:
       postgres:
         image: postgres:15
@@ -42,7 +42,7 @@ jobs:
         run: |
           python -V
           python -m pip install --upgrade pip
-          pip install pytest httpx pytest-cov
+          pip install pytest httpx requests pytest-cov
 
       - name: Install psql client & wait for Postgres
         run: |
@@ -54,7 +54,7 @@ jobs:
             echo "Waiting for Postgres… ($i/30)"; sleep 2
           done
 
-      # ---------- Tests ----------
+      # ---------- Tests (job fails if these fail) ----------
       - name: Test product_service
         working-directory: ./backend/product_service
         env:
@@ -97,7 +97,7 @@ jobs:
           pip install --no-cache-dir -r requirements.txt
           pytest -vv -ra || echo "no tests found for customer_service"
 
-      # ---------- Build & push (only runs if product_service tests passed) ----------
+      # ---------- Build & push (runs only if tests above passed) ----------
       - name: Azure login
         uses: azure/login@v2
         with:
