@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: customer-service
-          image: ${ACR_LOGIN_SERVER}/customer-service:${GITHUB_SHA}  # image name can keep underscore
+          image: ${ACR_LOGIN_SERVER}/customer_service:${GITHUB_SHA}  # image name can keep underscore
           ports:
             - containerPort: 8000
           env:

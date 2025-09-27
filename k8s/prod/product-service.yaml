@@ -1,24 +1,22 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: product_service
+  name: product-service
   labels:
-    app: product_service
+    app: product-service
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: product_service
+      app: product-service
   template:
     metadata:
       labels:
-        app: product_service
+        app: product-service
     spec:
-      imagePullSecrets:
-        - name: acr-pull
       containers:
-        - name: product_service
-          image: ${ACR_LOGIN_SERVER}/product_service:${GITHUB_SHA}
+        - name: product-service
+          image: ${ACR_LOGIN_SERVER}/product_service:${GITHUB_SHA}  # underscore OK in image path
           ports:
             - containerPort: 8000
           env:
@@ -28,11 +26,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: product_service
+  name: product-service
 spec:
   type: ClusterIP
   selector:
-    app: product_service
+    app: product-service
   ports:
     - port: 8000
       targetPort: 8000

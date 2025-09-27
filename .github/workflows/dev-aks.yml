@@ -38,6 +38,9 @@ jobs:
         run: kubectl create namespace "${{ env.DEV_NAMESPACE }}" --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Create/Update ACR pull secret (dev)
+        env:
+          SP_CLIENT_ID: ${{ fromJSON(secrets.AZURE_CREDENTIALS).clientId }}
+          SP_CLIENT_SECRET: ${{ fromJSON(secrets.AZURE_CREDENTIALS).clientSecret }}
         run: |
           kubectl create secret docker-registry acr-pull \
             --namespace "${{ env.DEV_NAMESPACE }}" \
