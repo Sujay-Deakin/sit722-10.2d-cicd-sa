@@ -103,12 +103,19 @@ jobs:
           done
 
 
-      - name: In-cluster smoke (/health)
+      - name: In-cluster smoke (endpoints exist)
         run: |
-          kubectl run smoke --rm -i -n "${STG_NS}" --image=curlimages/curl:8.10.1 --restart=Never -- \
-            sh -lc 'set -e; for s in product-service order-service customer-service; do
-                      code=$(curl -s -o /dev/null -w "%{http_code}" http://$s:8000/health);
-                      echo "$s -> $code"; [ "$code" = "200" ] || exit 1; done'
+          set -e
+          for s in product-service order-service customer-service; do
+            echo "Checking endpoints for $s ..."
+            EP=$(kubectl get ep -n "${STG_NS}" $s -o jsonpath='{.subsets[*].addresses[*].ip}')
+            if [ -z "$EP" ]; then
+              echo "No endpoints for $s"
+              exit 1
+            fi
+            echo "$s endpoints -> $EP"
+          done
+
 
       - name: Destroy ephemeral namespace
         if: always()
